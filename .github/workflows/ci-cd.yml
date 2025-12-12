@@ -1,0 +1,108 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [ "develop", "main" ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -q
+
+  build_and_push:
+    runs-on: ubuntu-latest
+    needs: [ test ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: vars
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+            echo "TAG=staging-latest" >> $GITHUB_OUTPUT
+          else
+            echo "TAG=prod-latest" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/timuuurka/devops-final-rk:${{ steps.vars.outputs.TAG }}
+
+  deploy_to_kali:
+    runs-on: ubuntu-latest
+    needs: [ build_and_push ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/kali_key
+          chmod 600 ~/.ssh/kali_key
+
+      - name: Upload compose file (staging or prod)
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+            TARGET_DIR="/home/${{ secrets.DEPLOY_USER }}/devops-final-rk/staging"
+            SRC_FILE="docker-compose.staging.yml"
+          else
+            TARGET_DIR="/home/${{ secrets.DEPLOY_USER }}/devops-final-rk/prod"
+            SRC_FILE="docker-compose.prod.yml"
+          fi
+
+          ssh -i ~/.ssh/kali_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "mkdir -p ${TARGET_DIR}"
+
+          scp -i ~/.ssh/kali_key -o StrictHostKeyChecking=no \
+            ${SRC_FILE} \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${TARGET_DIR}/docker-compose.yml
+
+      - name: Deploy (pull + up)
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "develop" ]; then
+            TARGET_DIR="/home/${{ secrets.DEPLOY_USER }}/devops-final-rk/staging"
+          else
+            TARGET_DIR="/home/${{ secrets.DEPLOY_USER }}/devops-final-rk/prod"
+          fi
+
+          ssh -i ~/.ssh/kali_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'SSHCMDS'
+            set -e
+            cd "$TARGET_DIR"
+            echo "${GHCR_READ_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+            docker compose pull
+            docker compose up -d
+            docker compose ps
+SSHCMDS
+        env:
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
