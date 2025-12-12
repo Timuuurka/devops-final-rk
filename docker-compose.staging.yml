@@ -1,0 +1,11 @@
+services:
+  web:
+    image: ghcr.io/timuuurka/devops-final-rk:staging-latest
+    ports:
+      - "8000:8000"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
