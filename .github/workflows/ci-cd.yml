@@ -8,13 +8,12 @@ permissions:
   contents: read
   packages: write
 
-#######################
-# 1. TESTS
-#######################
 jobs:
+  #######################
+  # 1. TESTS
+  #######################
   test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,13 +31,12 @@ jobs:
       - name: Run tests
         run: pytest -q
 
-#######################
-# 2. BUILD & PUSH IMAGE
-#######################
+  #######################
+  # 2. BUILD & PUSH IMAGE
+  #######################
   build_and_push:
     runs-on: ubuntu-latest
     needs: test
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,15 +64,17 @@ jobs:
           push: true
           tags: ghcr.io/timuuurka/devops-final-rk:${{ steps.vars.outputs.TAG }}
 
-#######################
-# 3. DEPLOY STAGING
-#######################
+  #######################
+  # 3. DEPLOY STAGING
+  #######################
   deploy_staging:
     runs-on: ubuntu-latest
     needs: build_and_push
     if: github.ref_name == 'develop'
-
     steps:
+      - name: Checkout (for compose files)
+        uses: actions/checkout@v4
+
       - name: Prepare SSH key
         run: |
           mkdir -p ~/.ssh
@@ -85,37 +85,35 @@ jobs:
         run: |
           ssh -i ~/.ssh/kali_key -o StrictHostKeyChecking=no \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            "mkdir -p /home/${{ secrets.DEPLOY_USER }}/devops-final-rk/staging"
+            "mkdir -p ~/devops-final-rk/staging"
 
           scp -i ~/.ssh/kali_key -o StrictHostKeyChecking=no \
             docker-compose.staging.yml \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/home/${{ secrets.DEPLOY_USER }}/devops-final-rk/staging/docker-compose.yml
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:~/devops-final-rk/staging/docker-compose.yml
 
       - name: Deploy to STAGING (Kali)
         run: |
           ssh -i ~/.ssh/kali_key -o StrictHostKeyChecking=no \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'SSH'
-              set -e
-              cd ~/devops-final-rk/staging
-              echo "${GHCR_READ_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
-              docker compose pull
-              docker compose up -d
-              docker compose ps
-SSH
-        env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "set -e; \
+             cd ~/devops-final-rk/staging; \
+             echo '${{ secrets.GHCR_READ_TOKEN }}' | docker login ghcr.io -u '${{ secrets.GHCR_USERNAME }}' --password-stdin; \
+             docker compose pull; \
+             docker compose up -d; \
+             docker compose ps"
 
-#######################
-# 4. DEPLOY PRODUCTION
-#######################
+  #######################
+  # 4. DEPLOY PRODUCTION
+  #######################
   deploy_prod:
     runs-on: ubuntu-latest
     needs: build_and_push
     if: github.ref_name == 'main'
     environment: production
-
     steps:
+      - name: Checkout (for compose files)
+        uses: actions/checkout@v4
+
       - name: Prepare SSH key
         run: |
           mkdir -p ~/.ssh
@@ -126,23 +124,19 @@ SSH
         run: |
           ssh -i ~/.ssh/kali_key -o StrictHostKeyChecking=no \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            "mkdir -p /home/${{ secrets.DEPLOY_USER }}/devops-final-rk/prod"
+            "mkdir -p ~/devops-final-rk/prod"
 
           scp -i ~/.ssh/kali_key -o StrictHostKeyChecking=no \
             docker-compose.prod.yml \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/home/${{ secrets.DEPLOY_USER }}/devops-final-rk/prod/docker-compose.yml
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:~/devops-final-rk/prod/docker-compose.yml
 
       - name: Deploy to PRODUCTION (Kali)
         run: |
           ssh -i ~/.ssh/kali_key -o StrictHostKeyChecking=no \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} << 'SSH'
-              set -e
-              cd ~/devops-final-rk/prod
-              echo "${GHCR_READ_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
-              docker compose pull
-              docker compose up -d
-              docker compose ps
-SSH
-        env:
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "set -e; \
+             cd ~/devops-final-rk/prod; \
+             echo '${{ secrets.GHCR_READ_TOKEN }}' | docker login ghcr.io -u '${{ secrets.GHCR_USERNAME }}' --password-stdin; \
+             docker compose pull; \
+             docker compose up -d; \
+             docker compose ps"
